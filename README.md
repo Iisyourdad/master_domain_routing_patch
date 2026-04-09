@@ -1,62 +1,69 @@
 # Routing Patch Helper
 
-This little script is a quick way to apply a small set of code changes into a running Coolify container without rebuilding the whole app image.
+`apply_routing_patch.sh` applies one or more GitHub PRs or branch URLs into a running Coolify container without rebuilding the image.
 
-It was made for a patch workflow: pull the changed files from a branch in a fork, then copy only those changed files into the target container. That makes it useful when you want to test a routing-related fix on a live self-hosted instance with as little ceremony as possible.
+It is meant for fast self-hosted testing when you want to layer a patch set on top of an existing Coolify install and validate the result quickly.
 
-## What the patch does
+## What It Does
 
-This patch adds a new option in Coolify server settings that lets you enable `master domain routing`.
+The script now builds one aggregate git workspace instead of copying each PR directly into the container one at a time.
 
-That setting is meant for setups where you do not want every server exposed directly to the public internet. A common example is a machine that is only reachable over VPN and SSH, a setup where you want your DNS records to point at one public-facing server instead of being split across several machines, or a homelab-style server that does not have its own public IP but can still be reached through a VPS that does.
+That means it will:
 
-With master domain routing turned on, the main server can receive the incoming request and forward it to the correct destination server automatically. In practice, that means you can use one publicly reachable server as the front door while still sending traffic to private or non-public machines behind it.
+1. Clone the upstream Coolify repo into a temporary workspace.
+2. Check out a local work branch from `BASE_REF`.
+3. Read every GitHub PR or branch URL from `patches.txt`.
+4. Fetch each source ref.
+5. Generate that ref's diff against `BASE_REF`.
+6. Apply each diff into the same workspace with `git apply --3way`.
+7. Stop if patches conflict instead of silently overwriting later files.
+8. Compute the final merged file set.
+9. Copy changed files into the container and remove deleted files.
+10. Clear Laravel caches, optionally run migrations, and optionally restart the container.
 
-This is not limited to traditional web apps either. It can also be used for other kinds of services, and has been tested with Minecraft servers, databases, and regular HTTP/HTTPS applications.
+This is safer than the older flow because overlapping PRs are now handled as a combined patch set instead of "last file copied wins".
 
-The end result is simpler DNS management and an easier way to route traffic to servers that are reachable privately but not meant to be exposed on their own.
+## Supported Patch Sources
 
-## What it does
+Each non-empty, non-comment line in `patches.txt` must be one of these:
 
-`apply_routing_patch.sh`:
+- `https://github.com/<owner>/<repo>/pull/<number>`
+- `https://github.com/<owner>/<repo>/tree/<branch>`
 
-1. Creates a temporary working directory
-2. Clones the forked Coolify repo
-3. Adds the main Coolify repo as `upstream`
-4. Fetches the latest refs from both remotes
-5. Checks out the patch branch
-6. Compares that branch against a base ref
-7. Collects only the files changed by that diff
-8. Copies those files into the running Docker container
-9. Cleans up the temporary files when it finishes
+The included `patches.txt` currently points at:
 
-In other words, it does not rebuild Coolify. It overlays the changed files directly into the container filesystem.
+```txt
+https://github.com/Iisyourdad/coolify/pull/4
+https://github.com/Iisyourdad/coolify/pull/5
+https://github.com/Iisyourdad/coolify/pull/6
+```
 
-## Default behavior
+## Why This Works Better
 
-If you run the script without changing anything, it assumes the following:
+Compared with the earlier script, this version:
 
-Note that you do not need to change any of this, just if you make your own custom version you know what to change.
-
-- Fork repo: `https://github.com/Iisyourdad/coolify.git`
-- Upstream repo: `https://github.com/coollabsio/coolify.git`
-- Branch: `fix/remote-server-forwarding`
-- Base ref: `upstream/next`
-- Container name: `coolify`
-- Destination inside container: `/var/www/html`
+- applies all entries into one shared workspace instead of copying each PR independently
+- fails on conflicts instead of silently overwriting previous file copies
+- handles deletions and renames when syncing into the container
+- supports `DRY_RUN=true` so you can validate the combined patch set without touching Docker
+- clears Laravel caches by default after file sync
+- can auto-run migrations when files under `database/migrations/` changed
+- preserves the temp workspace automatically when the script fails
 
 ## Requirements
 
-You should have:
+You need:
 
 - `bash`
 - `git`
-- `docker`
-- A running container named `coolify` unless you override `CONTAINER`
+- `tar`
+- `docker` unless you use `DRY_RUN=true`
 
-The script also needs Docker access from the machine where you run it.
+You also need Docker access on the machine running the script.
 
-## How to run it
+If you are not using `DRY_RUN=true`, the target container must already exist.
+
+## How To Run It
 
 From this directory:
 
@@ -65,59 +72,89 @@ chmod +x apply_routing_patch.sh
 ./apply_routing_patch.sh
 ```
 
-If the defaults match your setup, that is enough.
+By default it reads `patches.txt` from the same directory as the script, patches the `coolify` container, clears caches, runs migrations only when migration files changed, and then restarts the container.
 
-## Common examples
+## Common Examples
 
-Note that you need to run this as root.
-
-Default patch.
+Preview the combined patch set without touching the container:
 
 ```bash
-./apply_routing_patch.sh
+DRY_RUN=true ./apply_routing_patch.sh
 ```
 
-Run it against a different container:
+Patch a different container:
 
 ```bash
 CONTAINER=my-coolify ./apply_routing_patch.sh
 ```
 
-Run it against a different branch:
+Use a different patch list:
 
 ```bash
-BRANCH=my-fix-branch ./apply_routing_patch.sh
+PATCHES_FILE=/path/to/patches.txt ./apply_routing_patch.sh
 ```
 
-Use a different base ref for the diff:
+Use a different base ref:
 
 ```bash
 BASE_REF=upstream/main ./apply_routing_patch.sh
 ```
 
-Override everything:
+Skip the restart:
 
 ```bash
-FORK_URL=https://github.com/yourname/coolify.git \
-UPSTREAM_URL=https://github.com/coollabsio/coolify.git \
-BRANCH=your-branch \
-BASE_REF=upstream/next \
-CONTAINER=coolify \
-DEST_DIR=/var/www/html \
-./apply_routing_patch.sh
+RESTART_CONTAINER=false ./apply_routing_patch.sh
 ```
 
-## Environment variables
+Disable cache clear:
 
-The script can be customized with these variables:
+```bash
+CLEAR_CACHE=false ./apply_routing_patch.sh
+```
 
-- `FORK_URL`: fork to clone
-- `UPSTREAM_URL`: upstream repo to compare against
-- `BRANCH`: branch to check out from the fork
-- `BASE_REF`: ref used as the comparison base
-- `CONTAINER`: target Docker container name
-- `DEST_DIR`: destination path inside the container
+Always run migrations:
 
-## Imporatant information.
+```bash
+RUN_MIGRATIONS=true ./apply_routing_patch.sh
+```
 
-This script copies files directly into a running container, so the changes are immediate but not especially permanent. If the container is recreated, those file changes can be lost unless the image or mounted files are updated separately. If you update coolify, master domain routing will be overwritten and you will have to rerun the script.
+Never run migrations:
+
+```bash
+RUN_MIGRATIONS=false ./apply_routing_patch.sh
+```
+
+Run an extra command inside the container after syncing files:
+
+```bash
+POST_APPLY_COMMAND='php artisan queue:restart' ./apply_routing_patch.sh
+```
+
+Keep the temp workspace even on success:
+
+```bash
+KEEP_WORKDIR=true ./apply_routing_patch.sh
+```
+
+## Environment Variables
+
+- `UPSTREAM_URL`: upstream repo to clone and compare against
+- `BASE_REF`: base ref used for diffs, default `upstream/next`
+- `PATCHES_FILE`: patch source list, default is the local `patches.txt`
+- `CONTAINER`: target Docker container name, default `coolify`
+- `DEST_DIR`: destination path inside the container, default `/var/www/html`
+- `RESTART_CONTAINER`: `true` or `false`
+- `CLEAR_CACHE`: `true` or `false`
+- `RUN_MIGRATIONS`: `true`, `false`, or `auto`
+- `POST_APPLY_COMMAND`: optional shell command to run inside the container after file sync
+- `DRY_RUN`: `true` or `false`
+- `KEEP_WORKDIR`: `true` or `false`
+
+`RUN_MIGRATIONS=auto` means migrations only run when the final merged patch set changes files under `database/migrations/`.
+
+## Important Notes
+
+- This script still overlays files directly into a running container. If the container is recreated or Coolify is updated, these changes can be lost.
+- The script is safer than the original version, but it still assumes the listed PRs or branches are intended to be combined on top of the same `BASE_REF`.
+- If a patch fails to apply cleanly, the script stops and keeps the temp workspace so you can inspect the conflict.
+- If your patch set needs extra build or runtime steps beyond cache clear, migrations, or restart, use `POST_APPLY_COMMAND` or handle those manually.
