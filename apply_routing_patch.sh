@@ -3,6 +3,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Keep git output non-interactive so the script never drops into a pager.
+export GIT_PAGER="${GIT_PAGER:-cat}"
+
 UPSTREAM_URL="${UPSTREAM_URL:-https://github.com/coollabsio/coolify.git}"
 BASE_REF="${BASE_REF:-upstream/next}"
 
