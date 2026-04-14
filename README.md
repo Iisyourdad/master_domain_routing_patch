@@ -35,7 +35,6 @@ The included `patches.txt` currently points at:
 ```txt
 https://github.com/Iisyourdad/coolify/pull/4
 https://github.com/Iisyourdad/coolify/pull/5
-https://github.com/Iisyourdad/coolify/pull/6
 ```
 
 ## Why This Works Better
