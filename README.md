@@ -8,6 +8,8 @@ It is meant for fast self-hosted testing when you want to layer a patch set on t
 
 The removal script defaults to `upstream/v4.x` as its reset base, so it removes only the patches you list and does not move the workspace to `next`. Override with `BASE_REF=...` if you need a different reset branch.
 
+Every entry in `remove_patch.txt` must also exist in `patches.txt`. The removal script treats `patches.txt` as the active patch stack and subtracts only the listed entries from it.
+
 ## What It Does
 
 The apply script now builds one aggregate git workspace instead of copying each PR directly into the container one at a time.
